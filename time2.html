@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en-US">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+        <title>Time Tracker</title>
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-rbsA2VBKQhggwzxH7pPCaAqO46MgnOM80zW1RWuH61DGLwZJEdK2Kadq2F9CUG65" crossorigin="anonymous">
+        <link rel="manifest" href="./manifest.json">
+        <style type="text/css">
+            html {
+                min-height: 100%;
+            }
+            body {
+                background: url(https://snydergd.github.io/images/paper.jpg) center center repeat;
+                min-height: 100vh;
+                display: flex;
+                flex-direction: column;
+            }
+            body > * {
+                flex-grow: 0;
+            }
+            main {
+                flex-grow: 1;
+            }
+        </style>
+    </head>
+    <body>
+        <header>
+            <div class="navbar navbar-dark bg-dark shadow-sm">
+                <div class="container">
+                    <a href="#" class="navbar-brand">Time Tracker</a>
+                </div>
+            </div>
+        </header>
+        <main class="container py-4">
+            
+<div id="root">Javascript is loading...</div>
+<button onclick="update(defaultData)" class="btn btn-secondary mt-3">Reset</button>
+
+<style>
+    .alert {
+        position: absolute;
+        top: 0;
+        z-index: 1000;
+    }
+</style>
+
+<script src="https://unpkg.com/react@17/umd/react.development.js" crossorigin=""></script>
+<script src="https://unpkg.com/react-dom@17/umd/react-dom.development.js" crossorigin=""></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" integrity="sha512-Evv84Mr4kqVGRNSgIGL/F/aIDqQb7xQ2vcrdIwxfjThSH8CSR7PBEakCr51Ck+w+/U6swU2Im1vVX0SVk9ABhg==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+
+<script type="text/babel">
+    const { useState, useEffect, useRef, useCallback } = React;
+
+    // Register service worker
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('./service-worker.js')
+            .then(() => console.log('Service Worker registered'))
+            .catch(err => console.error('Service Worker registration failed:', err));
+    }
+
+    const DAY_MS = 24*60*60*1000;
+    const range = (start, end, step = 1) => {
+        const arr = [];
+        for (let i = (end === undefined) ? 0 : start; i <= ((end === undefined) ? start : end); i += step) {
+            arr.push(i);
+        }
+        return arr;
+    };
+    const stripTime = date => {
+        const d = new Date(date);
+        d.setHours(0, 0, 0, 0);
+        return d;
+    };
+    const dateString = date => {
+        const d = new Date(date);
+        return d.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    };
+    const dateToIsoString = date => {
+        const dateObj = new Date(date);
+        const year = dateObj.getFullYear();
+        const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+        const day = String(dateObj.getDate()).padStart(2, '0');
+        const hours = String(dateObj.getHours()).padStart(2, '0');
+        const minutes = String(dateObj.getMinutes()).padStart(2, '0');
+        const seconds = String(dateObj.getSeconds()).padStart(2, '0');
+        return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+    };
+    const isoStringToDate = isoString => {
+        return new Date(isoString);
+    };
+
+    const stringToColor = str => {
+        // Generate a color based on string hash
+        let hash = 0;
+        str = ("" + str);
+        for (let i = 0; i < str.length; i++) {
+            hash = str.charCodeAt(i) + ((hash << 5) - hash);
+        }
+        // Add a prime multiplier and bitwise operations to spread similar values further apart
+        hash = Math.abs((hash * 2654435761) % 2147483648);
+        hash = ((hash ^ (hash >> 6)) * 0x3E3) % 2147483647;
+        // Convert to HSL for better distribution
+        const h = Math.abs(hash) % 360;
+        const s = 70 + (Math.abs(hash) % 30); // 70-100% saturation
+        const l = 60 + (Math.abs(hash >> 8) % 20); // 60-80% lightness
+        return `hsla(${h}, ${s}%, ${l}%, 0.7)`;
+    };
+    const findTask = (tasks, id) => {
+        return tasks.find(task => task.id === id) || { text: "Unknown Task", time: 0 };
+    };
+
+    const taskWorkTime = (data, taskId, {start, end} = {}) => {
+        return Math.floor(data.work.filter(work => (!start || !work.end || work.end > start) && (!end || work.start < end)).reduce((total, work) => {
+            if (work.task === taskId && work.end) {
+                return total + (work.end - work.start);
+            } else if (work.task === taskId && !work.end) {
+                return total + (new Date().getTime() - work.start);
+            }
+            return total;
+        }, 0)/1000/60);
+    };
+    const taskTags = (taskText) => {
+        const tags = taskText.match(/(?<=\s|^)[+@][a-zA-Z0-9]+(?=\b)/g);
+        return tags ? tags.map(tag => tag.replace(/[\[\]]/g, '')) : [];
+    };
+
+    const stopWork = (data) => {
+        return {
+            ...data,
+            work: data.work.map(work => {
+                if (!work.end) {
+                    return { ...work, end: new Date().getTime() };
+                }
+                return work;
+            }),
+        };
+    };
+    const startWork = (data, taskId) => {
+        return {
+            ...data,
+            work: [...data.work, {
+                task: taskId,
+                start: new Date().getTime(),
+                id: `${new Date().getTime()}_${Math.floor(Math.random()*1000)}`,
+            }],
+        };
+    };
+
+    const MAX_PRIORITY = 9000;
+    const PRIORITY_PATTERN = /\(([A-Z])\)/;
+    const taskPriority = task => {
+        const match = task.text.match(PRIORITY_PATTERN);
+        if (match) {
+            return match[1].charCodeAt(0) - 'A'.charCodeAt(0);
+        } else {
+            return MAX_PRIORITY; // Default priority for tasks without a priority
+        }
+    }
+
+    function Planner({data, onChange}) {
+        const [date, setDate] = useState(stripTime(new Date()).getTime());
+        const [pendingSpan, setPendingSpan] = useState(null);
+        const [hoverText, setHoverText] = useState(null);
+        const [currentTime, setCurrentTime] = useState(new Date());
+
+        useEffect(() => {
+            const interval = setInterval(() => {
+                setCurrentTime(new Date());
+            }, 1000);
+            return () => clearInterval(interval);
+        }, []);
+
+        const rangeStart = 5;
+        const rangeEnd = 21;
+        const hourRange = range(rangeStart, rangeEnd);
+        const intervalTime = 5;
+        const timeFromMouseEvent = e => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            const pos = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left; // Get mouse position relative to the SVG
+            const hourTime = rangeStart + (pos / rect.width) * (rangeEnd - rangeStart);
+            const hours = Math.floor(hourTime);
+            const minutes = Math.round((hourTime - hours) * 60/intervalTime)*intervalTime;
+            const baseDate = new Date(date);
+            return new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate(), hours, minutes);
+        }
+
+        const mouseDown = e => {
+            if (data.selectedTask) {
+                setPendingSpan([timeFromMouseEvent(e).getTime(), null]);
+            }
+        };
+        const mouseMove = e => {
+            if (pendingSpan) {
+                setPendingSpan([pendingSpan[0], timeFromMouseEvent(e).getTime()]);
+            }
+        };
+        const mouseUp = e => {
+            if (pendingSpan && pendingSpan[1]) {
+                let start, end;
+                if (pendingSpan[0] < pendingSpan[1]) {
+                    start = pendingSpan[0];
+                    end = pendingSpan[1];
+                } else {
+                    start = pendingSpan[1];
+                    end = pendingSpan[0];
+                }
+                // Check if the span overlaps with existing spans
+                const newSpans = [];
+                for (const span of data.spans) {
+                    if (start < span.end && end > span.start) {
+                        if (span.task === data.selectedTask) {
+                            // If the span overlaps with the same task, merge them
+                            start = start < span.start ? start : span.start;
+                            end = end > span.end ? end : span.end;
+                        } else {
+                            // Otherwise, shorten the existing span to prevent overlap
+                            newSpans.push({
+                                ...span,
+                                start: span.start < start ? span.start : end,
+                                end: span.end > end ? span.end : start,
+                            });
+                        }
+                    } else {
+                        newSpans.push(span);
+                    }
+                }
+                newSpans.push({start, end, task: data.selectedTask});
+                onChange({
+                    ...data,
+                    spans: newSpans,
+                });
+            }
+            setPendingSpan(null);
+        };
+
+        const hover = text => e => {
+            setHoverText(text);
+        };
+        const leave = e => {
+            setHoverText(null);
+        };
+
+        const spansToShow = [...data.spans.filter(x => x.start < date+DAY_MS && x.end >= date), ...((pendingSpan && pendingSpan[0] && pendingSpan[1]) ? [{start: pendingSpan[0], end: pendingSpan[1], task: data.selectedTask}] : [])];
+
+        return <div>
+            <h2>
+                Planner
+                <button className="btn btn-sm btn-secondary ms-2" onClick={() => setDate(date-DAY_MS)}><i className="fa-solid fa-arrow-left" /></button>
+                {dateString(date)}
+                <button className="btn btn-sm btn-secondary ms-2" onClick={() => setDate(date+DAY_MS)}><i className="fa-solid fa-arrow-right" /></button>
+            </h2>
+
+            <svg onMouseDown={mouseDown} onMouseUp={mouseUp} onMouseMove={mouseMove} onTouchStart={mouseDown} onTouchEnd={mouseUp} onTouchMove={mouseMove} style={{
+                userSelect: "none", width: "100%", height: "100px", border: "1px solid #ccc", "touchAction": "pan-y"
+            }}>
+                {hourRange.map(hour => {
+                    const x = (hour-hourRange[0]) * 100/(hourRange.length-1)
+                    return <>
+                        <text key={'text' + hour} x={`${x+1}%`} y="95%" stroke="black">{hour}</text>
+                        <line key={'hour' + hour} x1={`${x}%`} y1="90%" x2={`${x}%`} y2="100%" stroke="black" strokeWidth="1" />
+                    </>
+                })}
+
+                {/* Planned work */}
+                {spansToShow.map((span, index) => {
+                    const start = new Date(span.start);
+                    const end = new Date(span.end);
+
+                    const range = [
+                        (start.getHours() - rangeStart + start.getMinutes()/60) * 100/(rangeEnd - rangeStart),
+                        (end.getHours() - rangeStart + end.getMinutes()/60) * 100/(rangeEnd - rangeStart),
+                    ];
+                    const startX = Math.min(range[0], range[1]);
+                    const endX = Math.max(range[0], range[1]);
+                    const task = findTask(data.tasks, span.task);
+                    return <rect onMouseOut={leave} onMouseOver={hover(task.text)} key={'span' + index} x={`${startX}%`} y="0" width={`${endX-startX}%`} height="40%" fill={stringToColor(task.text)} />;
+                })}
+
+                {/* Completed work */}
+                {data.work
+                    .filter(work => (work.start < (date+DAY_MS)) && (!work.end || work.end >= date))
+                    .map((work, index) => {
+                    const start = new Date(Math.max(work.start, date));
+                    const end = work.end ? new Date(work.end) : new Date();
+                    const startX = Math.max(0, (start.getHours() - rangeStart + start.getMinutes()/60) * 100/(rangeEnd - rangeStart));
+                    const endX = Math.min(100, (end.getHours() - rangeStart + end.getMinutes()/60) * 100/(rangeEnd - rangeStart));
+                    const task = findTask(data.tasks, work.task);
+                    console.log(startX, endX)
+                    return <rect onMouseOut={leave} onMouseOver={hover(task.text)} key={'work' + index} x={`${startX}%`} y="40%" width={`${endX-startX}%`} height="40%" fill={stringToColor(task.text)} />;
+                })}
+
+                {hoverText && 
+                    <text x="50%" y="50%" textAnchor="middle" fill="black" fontSize="16px" fontWeight="bold">
+                        {hoverText}
+                    </text>
+                }
+                <line x1={`${(currentTime.getHours() - rangeStart + currentTime.getMinutes()/60) * 100/(rangeEnd - rangeStart)}%`} y1="0" x2={`${(currentTime.getHours() - rangeStart + currentTime.getMinutes()/60) * 100/(rangeEnd - rangeStart)}%`} y2="100%" stroke="red" strokeWidth="2" />
+            </svg>
+        </div>;
+    }
+
+    function EditableText({data, onChange}) {
+        const [editMode, setEditMode] = useState(false);
+        const [tempData, setTempData] = useState(data);
+
+        const startEdit = e => {
+            e.stopPropagation();
+            setEditMode(true);
+            setTempData(data);
+        };
+        const finalize = () => {
+            setEditMode(false);
+            if (tempData !== data) {
+                onChange(tempData);
+            }
+        };
+
+        return editMode ? <div className="form-inline">
+            <input
+                type="text"
+                className="form-control col-xs-3"
+                value={tempData}
+                onChange={e => setTempData(e.target.value)}
+                onBlur={finalize}
+                onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        finalize();
+                    } else if (e.key === 'Escape') {
+                        e.preventDefault();
+                        setEditMode(false);
+                    }
+                }}
+                autoFocus
+            />
+        </div> : (
+            <span onClick={startEdit} style={{ cursor: 'pointer' }}>
+                {data}
+            </span>
+        );
+    }
+
+    function CurrentWork({data, onChange}) {
+
+        const currentTask = data.tasks.find(task => task.id === data.selectedTask);
+        const currentWork = data.work.find(work => !work.end);
+        
+        const start = () => {
+            onChange(startWork(data, data.selectedTask));
+        };
+        const stop = () => {
+            onChange(stopWork(data));
+        };
+
+        return <div>
+            <h2>Current Work</h2>
+
+            {currentWork ? 
+                <button className="btn btn-sm btn-danger ms-2" onClick={stop}><i className="fa-solid fa-stop"></i> Stop Work</button>
+            :
+                currentTask && <button className="btn btn-sm btn-success ms-2" onClick={start}><i className="fa-solid fa-play"></i> Start Work</button>
+            }
+
+            {" "}
+
+            { (!currentTask && !currentWork) ? "Please select a task" : <>
+                <b>{currentWork ? findTask(data.tasks, currentWork.task).text : currentTask.text }</b>
+            </>}
+        </div>
+    }
+
+    function TaskList({data, onChange}) {
+        const [newTaskText, setNewTaskText] = useState('');
+        const [lastCheck, setLastCheck] = useState(new Date().getTime());
+
+        useEffect(() => {
+            const interval = setInterval(() => {
+                setLastCheck(new Date().getTime());
+            }, 1000);
+            return () => clearInterval(interval);
+        });
+
+        const addTask = e => {
+            onChange({
+                ...data,
+                tasks: [...data.tasks, { text: newTaskText, time: 0, id: new Date().getTime() }],
+            });
+            setNewTaskText('');
+        }
+
+        const selectTask = task => e => {
+            onChange({ ...data, selectedTask: task.id === data.selectedTask ? null : task.id });
+        };
+
+        const deleteTask = task => e => {
+            e.stopPropagation();
+            const newTasks = data.tasks.filter(existingTask => existingTask.id !== task.id);
+            onChange({ ...data, tasks: newTasks, selectedTask: task.id === data.selectedTask ? null : data.selectedTask });
+        };
+
+        const startTask = task => e => {
+            e.stopPropagation();
+            onChange(startWork(stopWork(data), task.id));
+        };
+
+        const setPriority = (targetTask, priority) => e => {
+            e.stopPropagation();
+            const textWithPriority = (text, priority) => {
+                const priorityString = `(${String.fromCharCode('A'.charCodeAt(0) + priority)})`;
+                if (taskPriority({ text }) < MAX_PRIORITY) {
+                    return text.replace(PRIORITY_PATTERN, priorityString);
+                } else if (priority < MAX_PRIORITY) {
+                    return `${priorityString} ${text}`;
+                } else {
+                    return text.replace(PRIORITY_PATTERN, '');
+                }
+            }
+
+            const newTasks = data.tasks.map(task => {
+                const currentPriority = taskPriority(task);
+                console.log(task, currentPriority);
+
+                if (task.id === targetTask.id) {
+                    return { ...task, text: textWithPriority(task.text, priority) };
+                } else if (currentPriority >= priority && currentPriority < MAX_PRIORITY) {
+                    return { ...task, text: textWithPriority(task.text, currentPriority > 24 ? MAX_PRIORITY : currentPriority + 1) };
+                }
+                return task;
+            });
+            onChange({ ...data, tasks: newTasks });
+        };
+        const setTaskText = task => newText => {
+            const newTasks = data.tasks.map(existingTask => {
+                if (existingTask.id === task.id) {
+                    return { ...existingTask, text: newText };
+                }
+                return existingTask;
+            });
+            onChange({ ...data, tasks: newTasks });
+        };
+
+        const sortedTasks = [...data.tasks].sort((a, b) => {
+            return taskPriority(a) - taskPriority(b);
+        });
+
+        return (<div>
+            <h2>Tasks</h2>
+            <form action="#">
+                <div className="input-group">
+                    <input type="text" 
+                        className="form-control mb-3" 
+                        placeholder="Add new task"
+                        autoFocus
+                        value={newTaskText}
+                        onChange={e => setNewTaskText(e.target.value)} />
+                    <div className="input-group-append">
+                        <button type="submit" className="btn btn-primary" onClick={addTask}>Add Task</button>
+                    </div>
+                </div>
+            </form>
+            <ul className="list-group">
+                {sortedTasks.map((task, index) => {
+                    const timeWorked = taskWorkTime(data, task.id);
+
+                    return <li key={index} className="list-group-item" onClick={selectTask(task)} style={ data.selectedTask === task.id ? { backgroundColor: '#d1ecf1' } : {} }>
+                        <span style={{display: "inline-block", width: "1em", height: "1em", backgroundColor: stringToColor(task.text) }}>{" "}</span>
+                        {" "}<EditableText data={task.text} onChange={setTaskText(task)} />
+                        <span className="float-end">
+                            { timeWorked > 0 && <span className="badge bg-secondary">{timeWorked} min</span> }
+                            <button className="btn btn-sm btn-primary ms-2" onClick={startTask(task)}>
+                                <i className="fa-solid fa-play"></i>
+                            </button>
+                            <button className="btn btn-sm btn-danger ms-2" onClick={deleteTask(task)}>
+                                <i className="fa-solid fa-trash"></i>
+                            </button>
+                            <button className="btn btn-sm btn-secondary ms-2" onClick={setPriority(task, 0)}>A</button>
+                            <button className="btn btn-sm btn-secondary ms-2" onClick={setPriority(task, 1)}>B</button>
+                            <button className="btn btn-sm btn-secondary ms-2" onClick={setPriority(task, 2)}>C</button>
+                        </span>
+                    </li>
+                })}
+            </ul>
+        </div>);
+    }
+
+    function WorkAdjustment({data, onChange}) {
+        const [workNote, setWorkNote] = useState('');
+        const [hidden, setHidden] = useState(false);
+
+        const sorted = [...data.work].sort((a, b) => {
+            let result = (b.end || new Date().getTime()) - (a.end || new Date().getTime());
+            if (result == 0) result = b.start - a.start;
+            return result;
+        });
+        const setDateField = (work, field) => value => {
+            const newWork = data.work.map(w => {
+                if (w === work) {
+                    return { ...w, [field]: isoStringToDate(value) };
+                }
+                return w;
+            });
+            onChange({ ...data, work: newWork });
+        };
+        const changeWork = targetWork => e => {
+            e.stopPropagation();
+            const newWork = data.work.map(work => {
+                if (targetWork === work) {
+                    return { ...work, task: data.selectedTask };
+                }
+                return work;
+            });
+            onChange({ ...data, work: newWork });
+        };
+        const deleteWork = work => e => {
+            e.stopPropagation();
+            const newWork = data.work.filter(w => w !== work);
+            onChange({ ...data, work: newWork });
+        };
+        const noteEdit = work => e => {
+            e.stopPropagation();
+            setWorkNote(work.note || '');
+            onChange({ ...data, editWorkNote: work.id });
+        };
+        const addEmptyWork = e => {
+            e.stopPropagation();
+            const newData = startWork(data, data.selectedTask);
+            newData.work[newData.work.length - 1].end = newData.work[newData.work.length - 1].start; // Set end to start for new work
+            onChange(newData);
+        };
+
+        return <div>
+            <h2 onClick={() => setHidden(!hidden)} style={{ cursor: 'pointer' }}>
+                Adjust Work Record
+                {data.selectedTask && <button className="btn btn-sm btn-secondary ms-2" onClick={addEmptyWork}><i className="fa-solid fa-plus"></i></button>}
+            </h2>
+
+            { !hidden && (data.editWorkNote ?
+                <textarea
+                    className="form-control mb-3"
+                    placeholder="Edit work note"
+                    value={workNote}
+                    onChange={e => setWorkNote(e.target.value)}
+                    autoFocus
+                    onBlur={() => {
+                        onChange({ ...data, work: data.work.map(x => {
+                            if (x.id === data.editWorkNote) {
+                                return { ...x, note: workNote };
+                            }
+                            return x;
+                        }), editWorkNote: null });
+                    }} />
+            :
+                <ul className="list-group">
+                    {sorted.map((work, index) => {
+                        const task = findTask(data.tasks, work.task);
+
+                        return <li key={index} className="list-group-item" >
+                            <span>{task.text} - <span className="badge bg-secondary">{Math.floor(((work.end || new Date().getTime())-work.start)/1000/60)} min</span> - (<EditableText data={dateToIsoString(work.start)} onChange={setDateField(work, 'start')} />)-(<EditableText data={work.end ? dateToIsoString(work.start) : 'now'} onChange={setDateField(work, 'end')} />)</span>
+                            <span className="float-end">
+                                <button className="btn btn-sm btn-primary ms-2" onClick={noteEdit(work)}>
+                                    <i className="fa-solid fa-pen-to-square"></i>
+                                </button>
+                                {(data.selectedTask && data.selectedTask !== work.task) && <button className="btn btn-sm btn-secondary ms-2" onClick={changeWork(work)}>Change Task To Current</button>}
+                                <button className="btn btn-sm btn-danger ms-2" onClick={deleteWork(work)}><i className="fa-solid fa-trash"></i></button>
+                            </span>
+                        </li>;
+                    })}
+                </ul>
+            )}
+        </div>;
+    }
+
+    function RangeSummary({data, start, end, breakdownBy = 'task'}) {
+        const applicableWork = data.work.filter(span => span.start < end && (span.end > start || !span.end));
+        const classify = work => {
+            if (typeof breakdownBy === 'function') {
+                return breakdownBy(work);
+            } else if (typeof breakdownBy === 'string') {
+                if (breakdownBy === 'task') {
+                    return findTask(data.tasks, work.task).text;
+                }
+                return work[breakdownBy];
+            } else {
+                throw new Error("Invalid breakdownBy type");
+            }
+        }
+        const categories = [...new Set(applicableWork.map(classify))];
+
+        return <>
+            {categories.map(category => {
+                const totalTime = Math.floor(applicableWork.reduce((total, work) => {
+                    if (classify(work) === category) {
+                        return total + ((work.end || new Date().getTime()) - work.start);
+                    }
+                    return total;
+                }, 0) / 1000 / 60); // Convert to minutes
+
+                return <div key={category}>
+                    {category} -- {totalTime} min
+                </div>;
+            })}
+        </>;
+    }
+
+    function TimeAnalysis({data}) {
+        const primaryWorkTag = work => {
+            const task = findTask(data.tasks, work.task);
+            return taskTags(task.text)[0] || 'Uncategorized';
+        }
+    
+        return <div>
+            <h2>Time Analysis</h2>
+            <h3>Today</h3>
+            <RangeSummary data={data} start={stripTime(new Date()).getTime()} end={stripTime(new Date()).getTime() + DAY_MS} breakdownBy={primaryWorkTag} />
+        </div>
+    }
+
+    function CollapsibleSection({title, hidden: initialHidden = false, children}) {
+        const [hidden, setHidden] = useState(initialHidden);
+
+        return <div>
+            <h2 onClick={() => setHidden(!hidden)} style={{ cursor: 'pointer' }}>
+                {title}
+            </h2>
+            {!hidden && <div>
+                {children}
+            </div>}
+        </div>;
+    }
+
+    function Settings({data, onChange}) {
+
+        const changeSetting = settingName => e => {
+            e.stopPropagation();
+            onChange({ ...data, settings: { ...data.settings, [settingName]: e.target.value } });
+        };
+        const setting = settingName => (data && data.settings && data.settings[settingName] || '');
+
+        return <div>
+            WebDav User: <input type="text" className="form-control mb-3" value={setting('webdavUser')} onChange={changeSetting('webdavUser')} />
+            WebDav Password: <input type="password" className="form-control mb-3" value={setting('webdavPassword')} onChange={changeSetting('webdavPassword')} />
+            WebDav URL: <input type="text" className="form-control mb-3" value={setting('webdavUrl')} onChange={changeSetting('webdavUrl')} />
+            WebDav File: <input type="text" className="form-control mb-3" value={setting('webdavFile')} onChange={changeSetting('webdavFile')} />
+        </div>;
+    }
+
+    function App({data, onChange}) {
+
+        return <div>
+            <Planner data={data} onChange={onChange} />
+            <CurrentWork data={data} onChange={onChange} />
+            <TaskList data={data} onChange={onChange} />
+            <WorkAdjustment data={data} onChange={onChange} />
+            <TimeAnalysis data={data} />
+            <CollapsibleSection title="Settings" hidden>
+                <Settings data={data} onChange={onChange} />
+            </CollapsibleSection>
+        </div>
+    }
+
+    // WebDav
+    const davAuthHeaders = () => ({
+        "Authorization": 'Basic ' + btoa(`${data.settings.webdavUser}:${data.settings.webdavPassword}`)
+    });
+    const saveDavFile = async (name, content) => {
+        await fetch(`${data.settings.webdavUrl}/${name}`, {
+            method: 'PUT',
+            headers: {
+              ...davAuthHeaders(),
+              'Content-Type': 'text/plain'
+            },
+            body: content
+        });
+    };
+    const loadDavFile = async (name) => {
+        const response = await fetch(`${data.settings.webdavUrl}/${name}`, {
+            method: 'GET',
+            headers: {
+              ...davAuthHeaders(),
+            },
+        });
+        if (!response.ok) {
+            throw new Error(`Failed to load WebDav file: ${response.status} ${response.statusText}`);
+        }
+        return await response.text();
+    };
+    const missingDavFields = () => ["User", "Password", "Url", "File"].filter(field => (!(window?.data?.settings) || !window.data.settings['webdav' + field]));
+
+    // Data Persistence
+    const defaultData = {
+        tasks: [
+            { text: "wake up", id: new Date().getTime() },
+            { text: "take a break", id: new Date().getTime()+1 },
+            { text: "eat", id: new Date().getTime()+2 },
+        ],
+        spans: [],
+        work: [],
+        selectedTask: null,
+    };
+    const SAVE_INTERVAL = 5000;
+    setInterval(() => {
+        if (new Date().getTime() - lastUpdate > SAVE_INTERVAL) {
+            const missingFields = missingDavFields();
+            if (missingFields.length > 0) {
+                console.log("Missing WebDav settings, so can't persist: " + missingFields.join(", "));
+            } else {
+                saveDavFile(window.data.settings.webdavFile, JSON.stringify({...window.data, settings: null})).then(() => {
+                    console.log("Saved to WebDav");
+                }).catch(e => {
+                    console.error("Failed to save to WebDav", e);
+                });
+            }
+        }
+    }, SAVE_INTERVAL);
+    const loadData = async () => {
+        if (localStorage.getItem("time2_data")) {
+            try {
+                const savedData = JSON.parse(localStorage.getItem("time2_data"));
+                window.data = {
+                    ...defaultData,
+                    ...savedData,
+                    selectedTask: null,
+                };
+                if (!missingDavFields.length) {
+                    try {
+                        const davData = await loadDavFile(window.data.settings.webdavFile);
+                        const parsedDavData = JSON.parse(davData);
+                        window.data = {
+                            ...window.data,
+                            ...parsedDavData,
+                            selectedTask: null,
+                            settings: window.data.settings,
+                        };
+                        console.log("Loaded data from WebDav");
+                    } catch (e) {
+                        console.error("Failed to load data from WebDav", e);
+                    }
+                }
+            } catch (e) {
+                console.error("Failed to parse saved data", e);
+            }
+        }
+        if (!window.data) {
+            window.data = defaultData;
+        }
+    }
+
+    // Update state
+    let lastData = null;
+    let lastUpdate = 0;
+    const update = data => {
+        const jsonData = JSON.stringify(data);
+        if (jsonData === lastData) return;
+        localStorage.setItem("time2_data", jsonData);
+        window.data = data;
+        console.log(data);
+        lastUpdate = new Date().getTime();
+        render();
+    }
+    const render = () => {
+        ReactDOM.render(<App data={window.data} onChange={update} />, document.getElementById("root"));
+    }
+
+    // Start
+    loadData().then(() => {
+        update(window.data);
+    });
+</script>
+
+            <div class="clearfix"></div>
+        </main>
+        <footer class="my-2 bg-dark">
+            <div class="container py-4">
+                <p class="text-center text-muted">&copy; <span class="thisyear">2025</span> George Snyder</p>
+            </div>
+        </footer>
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-kenU1KFdBIe4zVF0s0G1M5b4hcpxyD9F7jL+jjXkk+Q2h455rYXK/7HAuoJl+0I4" crossorigin="anonymous"></script>
+        <script>[...document.querySelectorAll(".thisyear")].forEach(x => x.textContent = new Date().getFullYear());</script>
+    </body>
+</html>
