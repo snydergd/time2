@@ -638,7 +638,7 @@
         };
         const setting = settingName => (data && data.settings && data.settings[settingName] || '');
         const toggleActive = e => {
-            onChange({ ...data, settings: { ...data.settings, webdavActive: !data.settings.webdavActive }});
+            onChange({ ...data, settings: { ...data.settings, webdavActive: !data?.settings?.webdavActive }});
         };
 
         return <div>
@@ -646,7 +646,7 @@
             WebDav Password: <input type="password" className="form-control mb-3" value={setting('webdavPassword')} onChange={changeSetting('webdavPassword')} />
             WebDav URL: <input type="text" className="form-control mb-3" value={setting('webdavUrl')} onChange={changeSetting('webdavUrl')} />
             WebDav File: <input type="text" className="form-control mb-3" value={setting('webdavFile')} onChange={changeSetting('webdavFile')} />
-            <button className={`btn btn-${data.settings.webdavActive ? 'danger' : 'success'} mb-3`} onClick={toggleActive}>{data.settings.webdavActive ? "Disable WebDav" : "Activate WebDav"}</button>
+            <button className={`btn btn-${data?.settings?.webdavActive ? 'danger' : 'success'} mb-3`} onClick={toggleActive}>{data?.settings?.webdavActive ? "Disable WebDav" : "Activate WebDav"}</button>
         </div>;
     }
 
