@@ -257,10 +257,10 @@
             }}>
                 {hourRange.map(hour => {
                     const x = (hour-hourRange[0]) * 100/(hourRange.length-1)
-                    return <>
-                        <text key={'text' + hour} x={`${x+1}%`} y="95%" stroke="black">{hour}</text>
-                        <line key={'hour' + hour} x1={`${x}%`} y1="90%" x2={`${x}%`} y2="100%" stroke="black" strokeWidth="1" />
-                    </>
+                    return <g key={hour}>
+                        <text x={`${x+1}%`} y="95%" stroke="black">{hour}</text>
+                        <line x1={`${x}%`} y1="90%" x2={`${x}%`} y2="100%" stroke="black" strokeWidth="1" />
+                    </g>
                 })}
 
                 {/* Planned work */}
@@ -634,15 +634,19 @@
 
         const changeSetting = settingName => e => {
             e.stopPropagation();
-            onChange({ ...data, settings: { ...data.settings, [settingName]: e.target.value } });
+            onChange({ ...data, settings: { ...data.settings, webdavActive: false, [settingName]: e.target.value } });
         };
         const setting = settingName => (data && data.settings && data.settings[settingName] || '');
+        const toggleActive = e => {
+            onChange({ ...data, settings: { ...data.settings, webdavActive: !data.settings.webdavActive }});
+        };
 
         return <div>
             WebDav User: <input type="text" className="form-control mb-3" value={setting('webdavUser')} onChange={changeSetting('webdavUser')} />
             WebDav Password: <input type="password" className="form-control mb-3" value={setting('webdavPassword')} onChange={changeSetting('webdavPassword')} />
             WebDav URL: <input type="text" className="form-control mb-3" value={setting('webdavUrl')} onChange={changeSetting('webdavUrl')} />
             WebDav File: <input type="text" className="form-control mb-3" value={setting('webdavFile')} onChange={changeSetting('webdavFile')} />
+            <button className={`btn btn-${data.settings.webdavActive ? 'danger' : 'success'} mb-3`} onClick={toggleActive}>{data.settings.webdavActive ? "Disable WebDav" : "Activate WebDav"}</button>
         </div>;
     }
 
@@ -699,21 +703,18 @@
         work: [],
         selectedTask: null,
     };
-    const SAVE_INTERVAL = 5000;
-    setInterval(() => {
-        if (new Date().getTime() - lastUpdate > SAVE_INTERVAL) {
-            const missingFields = missingDavFields();
-            if (missingFields.length > 0) {
-                console.log("Missing WebDav settings, so can't persist: " + missingFields.join(", "));
-            } else {
-                saveDavFile(window.data.settings.webdavFile, JSON.stringify({...window.data, settings: null})).then(() => {
-                    console.log("Saved to WebDav");
-                }).catch(e => {
-                    console.error("Failed to save to WebDav", e);
-                });
-            }
+    const saveData = () => {
+        const missingFields = missingDavFields();
+        if (missingFields.length > 0) {
+            console.log("Missing WebDav settings, so can't persist: " + missingFields.join(", "));
+        } else {
+            saveDavFile(window.data.settings.webdavFile, JSON.stringify({...window.data, settings: null})).then(() => {
+                console.log("Saved to WebDav");
+            }).catch(e => {
+                console.error("Failed to save to WebDav", e);
+            });
         }
-    }, SAVE_INTERVAL);
+    };
     const loadData = async () => {
         if (localStorage.getItem("time2_data")) {
             try {
@@ -723,10 +724,15 @@
                     ...savedData,
                     selectedTask: null,
                 };
-                if (!missingDavFields.length) {
+                if (!missingDavFields.length && savedData.settings.webdavActive && navigator.onLine) {
                     try {
                         const davData = await loadDavFile(window.data.settings.webdavFile);
                         const parsedDavData = JSON.parse(davData);
+
+                        if (parsedDavData.lastUpdate < savedData.lastUpdate) {
+                            console.log("WebDav data is older than local data, using local data");
+                            return;
+                        }
                         window.data = {
                             ...window.data,
                             ...parsedDavData,
@@ -746,17 +752,39 @@
             window.data = defaultData;
         }
     }
+    // auto-save
+    const SAVE_INTERVAL = 5000;
+    setInterval(() => {
+        if (!data.settings.webdvActive || !navigator.onLine) return;
+        if (new Date().getTime() - window.data.lastUpdate > SAVE_INTERVAL) {
+            saveData();
+        }
+    }, SAVE_INTERVAL);
+
+    window.addEventListener('visibilitychange', e => {
+        if (document.hidden) {
+            saveData();
+        } else {
+            loadData().then(() => {
+                update(window.data);
+            });
+        }
+    });
 
     // Update state
     let lastData = null;
-    let lastUpdate = 0;
     const update = data => {
+        // Don't count "settings" changes as changes to data, for sync purposes
+        const persistedData = JSON.stringify({...data, settings: null});
+        if (persistedData !== lastData) {
+            data.lastUpdate = new Date().getTime();
+            lastData = persistedData;
+        }
+
         const jsonData = JSON.stringify(data);
-        if (jsonData === lastData) return;
         localStorage.setItem("time2_data", jsonData);
         window.data = data;
         console.log(data);
-        lastUpdate = new Date().getTime();
         render();
     }
     const render = () => {
